@@ -1,0 +1,263 @@
+import java.text.SimpleDateFormat
+
+plugins {
+	id 'java'
+	id 'osgi'
+	id 'eclipse'
+	id 'idea'
+	id 'maven'
+	id 'signing'
+	id 'com.diffplug.gradle.spotless' version '3.23.0'
+	id 'net.nemerosa.versioning' version '2.8.2'
+	id 'org.ajoberstar.github-pages' version '1.7.2'
+}
+
+Date buildTimeAndDate = new Date()
+ext {
+	buildDate = new SimpleDateFormat('yyyy-MM-dd').format(buildTimeAndDate)
+	buildTime = new SimpleDateFormat('HH:mm:ss.SSSZ').format(buildTimeAndDate)
+	builtByValue = project.hasProperty('builtBy') ? project.builtBy : project.defaultBuiltBy
+}
+
+description = 'Open Test Alliance for the JVM'
+def moduleName = 'org.opentest4j'
+
+repositories {
+	mavenCentral()
+}
+
+compileJava {
+	options.compilerArgs = ['--release', '6']
+}
+
+task compileModule(type: JavaCompile) {
+	def moduleSrcDir = file('src/module/java')
+	source(moduleSrcDir)
+	destinationDir = file("$buildDir/classes/java/modules")
+	classpath = compileJava.classpath
+	inputs.property("moduleName", moduleName)
+	inputs.property("moduleVersion", project.version)
+	options.compilerArgs = [
+			'--release', '9',
+			'--module-version', project.version as String,
+			'--module-source-path', moduleSrcDir.toString(),
+			'--patch-module', "$moduleName=${sourceSets.main.allJava.srcDirs.join(':')}",
+			'--module', moduleName
+	]
+}
+
+dependencies {
+	testCompile("junit:junit:${junit4Version}")
+}
+
+test {
+	testLogging {
+		exceptionFormat = 'full'
+	}
+}
+
+def normalizeVersion = { versionLiteral ->
+	try {
+		(versionLiteral =~ /(\d+)\.(\d+)\.(\d+).*/)[0][1..3].join('.')
+	} catch (e) {
+		throw new GradleException("Version '$versionLiteral' does not match version pattern, e.g. 1.0.0-QUALIFIER", e)
+	}
+}
+
+jar {
+	manifest {
+		attributes(
+			'Created-By': "${System.properties['java.version']} (${System.properties['java.vendor']} ${System.properties['java.vm.version']})".toString(),
+			'Built-By': builtByValue,
+			'Build-Date': buildDate,
+			'Build-Time': buildTime,
+			'Build-Revision': versioning.info.commit,
+			'Specification-Title': project.name,
+			'Specification-Version': normalizeVersion(project.version),
+			'Specification-Vendor': 'opentest4j.org',
+			'Implementation-Title': project.name,
+			'Implementation-Version': project.version,
+			'Implementation-Vendor': 'opentest4j.org'
+		)
+		license = 'The Apache License, Version 2.0'
+		vendor = 'opentest4j.org'
+	}
+	from(files("${compileModule.destinationDir}/$moduleName").builtBy(compileModule)) {
+		include('module-info.class')
+	}
+}
+
+javadoc {
+	options.memberLevel = org.gradle.external.javadoc.JavadocMemberLevel.PROTECTED
+	options.author = true
+	options.header = 'Open Test Alliance for the JVM'
+	options.addStringOption('Xdoclint:html,syntax,reference', '-quiet')
+	options.links 'https://docs.oracle.com/en/java/javase/11/docs/api/'
+}
+
+task sourcesJar(type: Jar, dependsOn: classes) {
+	classifier = 'sources'
+	from sourceSets.main.allSource
+}
+
+task javadocJar(type: Jar) {
+	classifier = 'javadoc'
+	from javadoc
+}
+
+artifacts {
+	archives sourcesJar
+	archives javadocJar
+}
+
+spotless {
+	java {
+		licenseHeaderFile rootProject.file('etc/spotless/apache-license-2.0.java')
+		importOrder('java', 'javax', 'com', 'org')
+		eclipse().configFile(rootProject.file('etc/eclipse/eclipse-formatter-settings.xml'))
+
+		trimTrailingWhitespace()
+		endWithNewline()
+	}
+}
+
+def signArtifacts = !project.version.contains('SNAPSHOT')
+
+if (signArtifacts) {
+	signing {
+		sign configurations.archives
+	}
+}
+
+uploadArchives {
+
+	dependsOn check
+
+	repositories {
+		mavenDeployer {
+
+			if (signArtifacts) {
+				beforeDeployment { MavenDeployment deployment -> signing.signPom(deployment) }
+			}
+
+			def ossrhUsername = rootProject.hasProperty('ossrhUsername') ? rootProject.ossrhUsername : ''
+			def ossrhPassword = rootProject.hasProperty('ossrhPassword') ? rootProject.ossrhPassword : ''
+
+			repository(url: "https://oss.sonatype.org/service/local/staging/deploy/maven2/") {
+				authentication(userName: ossrhUsername, password: ossrhPassword)
+			}
+
+			snapshotRepository(url: "https://oss.sonatype.org/content/repositories/snapshots/") {
+				authentication(userName: ossrhUsername, password: ossrhPassword)
+			}
+
+			pom.project {
+				name "${project.group}:${project.name}"
+				packaging 'jar'
+				description "Open Test Alliance for the JVM"
+				url 'https://github.com/ota4j-team/opentest4j'
+
+				scm {
+					connection 'scm:git:git://github.com/ota4j-team/opentest4j.git'
+					developerConnection 'scm:git:git://github.com/ota4j-team/opentest4j.git'
+					url 'https://github.com/ota4j-team/opentest4j'
+				}
+
+				licenses {
+					license {
+						name 'The Apache License, Version 2.0'
+						url 'http://www.apache.org/licenses/LICENSE-2.0.txt'
+					}
+				}
+
+				developers {
+					developer {
+						id 'bechte'
+						name 'Stefan Bechtold'
+						email 'stefan.bechtold@me.com'
+					}
+					developer {
+						id 'jlink'
+						name 'Johannes Link'
+						email 'business@johanneslink.net'
+					}
+					developer {
+						id 'marcphilipp'
+						name 'Marc Philipp'
+						email 'mail@marcphilipp.de'
+					}
+					developer {
+						id 'mmerdes'
+						name 'Matthias Merdes'
+						email 'Matthias.Merdes@heidelberg-mobil.com'
+					}
+					developer {
+						id 'sbrannen'
+						name 'Sam Brannen'
+						email 'sam@sambrannen.com'
+					}
+				}
+			}
+
+			pom.whenConfigured { p ->
+				p.dependencies = p.dependencies.findAll { dep -> dep.scope != 'test' }
+			}
+		}
+	}
+}
+
+spotless {
+	format 'misc', {
+		target project.fileTree(project.rootDir) {
+			include '**/*.gradle', '**/*.md', '**/*.gitignore'
+			exclude '.gradle/**/*.*'
+		}
+		indentWithTabs()
+		trimTrailingWhitespace()
+		endWithNewline()
+	}
+}
+
+def docsVersion = project.version.contains('SNAPSHOT') ? 'snapshot' : project.version
+def docsDir = new File(buildDir, 'ghpages-docs')
+
+task prepareDocsForUploadToGhPages(dependsOn: [javadoc], type: Copy) {
+	outputs.dir docsDir
+
+	from("$buildDir/docs") {
+		include 'javadoc/**'
+	}
+	into "${docsDir}/${docsVersion}"
+	filesMatching('javadoc/**') { fileCopyDetails ->
+		fileCopyDetails.path = fileCopyDetails.path.replace('javadoc/', 'api/')
+	}
+	includeEmptyDirs = false
+}
+
+task createCurrentDocsFolder(dependsOn: prepareDocsForUploadToGhPages, type: Copy) {
+	outputs.dir "${docsDir}/current"
+
+	from "${docsDir}/${docsVersion}"
+	into "${docsDir}/current"
+}
+
+createCurrentDocsFolder.onlyIf { project.hasProperty('replaceCurrentDocs') }
+
+githubPages {
+	repoUri = 'https://github.com/ota4j-team/opentest4j.git'
+
+	credentials {
+		username = project.hasProperty('githubToken') ? project.githubToken : ''
+		password = ''
+	}
+
+	pages {
+		from docsDir
+		into "docs"
+	}
+
+	deleteExistingFiles = false
+}
+
+prepareGhPages.dependsOn(prepareDocsForUploadToGhPages)
+prepareGhPages.dependsOn(createCurrentDocsFolder)
